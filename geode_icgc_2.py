@@ -76,7 +76,7 @@ def obtenir_imatge_wms(minx, miny, maxx, maxy, ample_px, alt_px):
     resp.raise_for_status()
     ct = resp.headers.get("Content-Type", "")
     if "image" not in ct:
-        raise RuntimeError(f"WMS no ha retornado imagen. CT:{ct}\n{resp.text[:300]}")
+        raise RuntimeError(f"WMS no ha retornat imatge. CT:{ct}\n{resp.text[:300]}")
     return resp.content
 
 
@@ -148,6 +148,45 @@ def compondre_imatges(fons_bytes, geol_bytes, opacitat=0.6):
     resultat.convert("RGB").save(buf, format="PNG")
     buf.seek(0)
     return buf.read()
+
+
+
+def obtenir_unitats_bbox(minx, miny, maxx, maxy):
+    """
+    Consulta directa al ArcGIS REST de la capa 38 (unitats-geologiques-50000)
+    con el BBOX del área solicitada.
+
+    Parámetros clave:
+    - returnGeometry=false  → solo atributos, sin polígonos (muy rápido)
+    - returnDistinctValues=true → una fila por Codi único (sin duplicados)
+    - orderByFields=Ordre ASC   → ordenado cronoestratigráficamente
+
+    Retorna: lista de dicts con Codi, Descripcio, Ordre, Era, Periode, Epoca
+             o None si el servicio no responde.
+    """
+    params = {
+        "f":                    "json",
+        "geometry":             f"{minx},{miny},{maxx},{maxy}",
+        "geometryType":         "esriGeometryEnvelope",
+        "inSR":                 EPSG_ICGC,
+        "spatialRel":           "esriSpatialRelIntersects",
+        "outFields":            "Codi,Descripcio,Ordre,Eo,Era,Periode,Epoca",
+        "returnGeometry":       "false",
+        "returnDistinctValues": "true",
+        "orderByFields":        "Ordre ASC",
+    }
+    try:
+        resp = requests.get(ARCGIS_BASE, params=params, timeout=20)
+        resp.raise_for_status()
+        data = resp.json()
+        if "error" in data:
+            return None
+        features = data.get("features", [])
+        if not features:
+            return None
+        return [f.get("attributes", {}) for f in features]
+    except Exception:
+        return None
 
 
 def obtenir_renderer():
@@ -584,24 +623,41 @@ if executar:
 
                 codis_renderer = set(renderer.keys())
 
-                # 3a. OCR — mètode principal ───────────────────────────────────
-                ocr_codis = {}
-                if TESSERACT_OK:
-                    with st.spinner("Aplicando OCR sobre las etiquetas del mapa…"):
-                        ocr_codis = detectar_codis_ocr(img_bytes, codis_renderer)
+                # 3. Identificación de unidades — método prioritario: API directa ──
+                unitats_api  = None
+                ocr_codis    = {}
+                color_codis  = {}
+                metode_used  = ""
 
-                # 3b. Colors — mètode complement ──────────────────────────────
-                with st.spinner("Analizando colores dominantes de la imagen…"):
-                    color_codis = detectar_codis_colors(img_bytes, renderer)
+                with st.spinner("Consultando unidades geológicas del área (API)…"):
+                    unitats_api = obtenir_unitats_bbox(minx, miny, maxx, maxy)
 
-                # 3c. Fusió ───────────────────────────────────────────────────
-                codis_finals = fusionar_deteccions(ocr_codis, color_codis, total_px)
+                if unitats_api is not None:
+                    # ── MÉTODO PRINCIPAL: API directa ─────────────────────────
+                    # Resultado exacto al 100%: el servidor devuelve exactamente
+                    # los codis que intersectan con el BBOX, sin OCR ni colores.
+                    metode_used  = "API directa (ArcGIS REST)"
+                    codis_finals = {u["Codi"] for u in unitats_api if u.get("Codi")}
+                    descripcions = {
+                        u["Codi"]: u for u in unitats_api if u.get("Codi")
+                    }
+                else:
+                    # ── FALLBACK: OCR + colores ───────────────────────────────
+                    # Solo si el servicio ArcGIS REST no responde
+                    st.warning("⚠️ API directa no disponible. Usando OCR + análisis de colores.")
+                    metode_used = "OCR + colores dominantes (fallback)"
 
-                # 4. Descripcions per als codis detectats ─────────────────────
-                descripcions = {}
-                if codis_finals:
-                    with st.spinner(f"Obteniendo descripciones de {len(codis_finals)} unidades…"):
-                        descripcions = obtenir_descripcions(list(codis_finals))
+                    if TESSERACT_OK:
+                        with st.spinner("Aplicando OCR sobre las etiquetas del mapa…"):
+                            ocr_codis = detectar_codis_ocr(img_bytes, codis_renderer)
+                    with st.spinner("Analizando colores dominantes de la imagen…"):
+                        color_codis = detectar_codis_colors(img_bytes, renderer)
+                    codis_finals = fusionar_deteccions(ocr_codis, color_codis, total_px)
+                    if codis_finals:
+                        with st.spinner(f"Obteniendo descripciones de {len(codis_finals)} unidades…"):
+                            descripcions = obtenir_descripcions(list(codis_finals))
+                    else:
+                        descripcions = {}
 
                 # 5. Llegenda ─────────────────────────────────────────────────
                 llegenda_path = os.path.join(tmpdir, "icgc_llegenda.png")
@@ -612,14 +668,13 @@ if executar:
 
                 # 6. Missatge d'èxit ───────────────────────────────────────────
                 if codis_finals:
-                    ocr_n   = len(ocr_codis)
-                    color_n = len([c for c in codis_finals if c not in ocr_codis])
                     st.success(
-                        f"✅ **{len(codis_finals)} unidades identificadas** — "
-                        f"{ocr_n} via OCR · {color_n} via colores dominantes"
+                        f"✅ **{len(codis_finals)} unidades geológicas identificadas** — "
+                        f"Método: *{metode_used}*"
                     )
                 else:
-                    st.warning("⚠️ No se han identificado unidades. Comprueba la conexión con el servicio ICGC.")
+                    st.warning("⚠️ No se han identificado unidades. "
+                               "Comprueba la conexión con el servicio ICGC.")
 
                 # 7. Previsualització ──────────────────────────────────────────
                 st.subheader("Previsualización")

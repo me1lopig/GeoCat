@@ -27,7 +27,7 @@ ARCGIS_LAYER = "https://maps.icgc.cat/vector01/rest/services/geologia_territoria
 CAMP_CODI    = "Codi"
 EPSG_ICGC    = 25831
 
-# Serveis de fons disponibles (URL, capa, versió WMS, paràmetre CRS)
+# Servicios de fondo disponibles (URL, capa, versión WMS, parámetro CRS)
 FONS_SERVEIS = {
     "Ortofoto color (ICGC)": {
         "url":    "https://geoserveis.icgc.cat/servei/catalunya/orto-territorial/wms",
@@ -76,15 +76,15 @@ def obtenir_imatge_wms(minx, miny, maxx, maxy, ample_px, alt_px):
     resp.raise_for_status()
     ct = resp.headers.get("Content-Type", "")
     if "image" not in ct:
-        raise RuntimeError(f"WMS no ha retornado imagen. CT:{ct}\n{resp.text[:300]}")
+        raise RuntimeError(f"WMS no ha retornat imatge. CT:{ct}\n{resp.text[:300]}")
     return resp.content
 
 
 
 def obtenir_imatge_fons(minx, miny, maxx, maxy, ample_px, alt_px, servei_key):
     """
-    Descarrega la imatge de fons (ortofoto o cartografia) del servei seleccionat.
-    Retorna bytes PNG/JPEG o None si el servei no és disponible.
+    Descarga la imagen de fondo (ortofoto o cartografía) del servicio seleccionado.
+    Retorna bytes PNG/JPEG o None si el servicio no está disponible.
     """
     servei = FONS_SERVEIS.get(servei_key)
     if servei is None:
@@ -115,9 +115,9 @@ def obtenir_imatge_fons(minx, miny, maxx, maxy, ample_px, alt_px, servei_key):
 
 def compondre_imatges(fons_bytes, geol_bytes, opacitat=0.6):
     """
-    Combina la imatge de fons amb la imatge geològica aplicant una opacitat
-    a la capa geològica (0.0 = transparent, 1.0 = opac).
-    Retorna bytes PNG de la imatge composta.
+    Combina la imagen de fondo con la imagen geológica aplicando una opacidad
+    a la capa geológica (0.0 = transparente, 1.0 = opaco).
+    Retorna bytes PNG de la imagen compuesta.
     """
     fons = Image.open(BytesIO(fons_bytes)).convert("RGBA")
     geol = Image.open(BytesIO(geol_bytes)).convert("RGBA")
@@ -128,11 +128,11 @@ def compondre_imatges(fons_bytes, geol_bytes, opacitat=0.6):
 
     # Aplicar opacitat al canal alfa de la geologia
     r, g, b, a = geol.split()
-    # Píxels blancs (fons neutre del WMS geologia) → transparents
+    # Píxeles blancos (fondo neutro del WMS geología) → transparentes
     arr_r = np.array(r)
     arr_g = np.array(g)
     arr_b = np.array(b)
-    # Màscara: píxels quasi blancs del WMS geologia → alpha=0 (transparent)
+    # Máscara: píxeles casi blancos del WMS geología → alpha=0 (transparente)
     blanc_mask = (arr_r > 248) & (arr_g > 248) & (arr_b > 248)
     arr_a = np.array(a).astype(np.float32)
     arr_a[blanc_mask] = 0
@@ -150,9 +150,48 @@ def compondre_imatges(fons_bytes, geol_bytes, opacitat=0.6):
     return buf.read()
 
 
+
+def obtenir_unitats_bbox(minx, miny, maxx, maxy):
+    """
+    Consulta directa al ArcGIS REST de la capa 38 (unitats-geologiques-50000)
+    con el BBOX del área solicitada.
+
+    Parámetros clave:
+    - returnGeometry=false  → solo atributos, sin polígonos (muy rápido)
+    - returnDistinctValues=true → una fila por Codi único (sin duplicados)
+    - orderByFields=Ordre ASC   → ordenado cronoestratigráficamente
+
+    Retorna: lista de dicts con Codi, Descripcio, Ordre, Era, Periode, Epoca
+             o None si el servicio no responde.
+    """
+    params = {
+        "f":                    "json",
+        "geometry":             f"{minx},{miny},{maxx},{maxy}",
+        "geometryType":         "esriGeometryEnvelope",
+        "inSR":                 EPSG_ICGC,
+        "spatialRel":           "esriSpatialRelIntersects",
+        "outFields":            "Codi,Descripcio,Ordre,Eo,Era,Periode,Epoca",
+        "returnGeometry":       "false",
+        "returnDistinctValues": "true",
+        "orderByFields":        "Ordre ASC",
+    }
+    try:
+        resp = requests.get(ARCGIS_BASE, params=params, timeout=20)
+        resp.raise_for_status()
+        data = resp.json()
+        if "error" in data:
+            return None
+        features = data.get("features", [])
+        if not features:
+            return None
+        return [f.get("attributes", {}) for f in features]
+    except Exception:
+        return None
+
+
 def obtenir_renderer():
     """
-    Descarrega el renderer UniqueValue (colors oficials per Codi) de la capa ArcGIS.
+    Descarga el renderer UniqueValue (colores oficiales por Codi) de la capa ArcGIS.
     Retorna dict: Codi → {"color": (R,G,B), "ordre": int}
     """
     try:
@@ -180,7 +219,7 @@ def obtenir_renderer():
 
 
 def obtenir_descripcions(codis):
-    """Consulta ArcGIS REST per obtenir Descripcio, Era, Periode, Epoca sense geometria."""
+    """Consulta ArcGIS REST para obtener Descripcio, Era, Periode, Epoca sin geometría."""
     if not codis:
         return {}
     codi_list = ",".join(f"'{c}'" for c in codis)
@@ -210,12 +249,12 @@ def obtenir_descripcions(codis):
 
 def _match_token(token, codis_set, cutoff=0.72):
     """
-    Matching robust d'un token OCR contra la llista de codis del renderer.
-    Ordre de prioritat:
-    1. Exacte (case-sensitive)
+    Matching robusto de un token OCR contra la lista de codis del renderer.
+    Orden de prioridad:
+    1. Exacto (case-sensitive)
     2. Case-insensitive
-    3. Substitució de confusions OCR habituals: O↔Q, l↔1, 0↔O, |→l
-    4. Fuzzy amb bonus si el primer caràcter coincideix
+    3. Sustitución de confusiones OCR habituales: O↔Q, l↔1, 0↔O, |→l
+    4. Fuzzy con bonus si el primer carácter coincide
     """
     if not token:
         return None
@@ -226,7 +265,7 @@ def _match_token(token, codis_set, cutoff=0.72):
     m = next((c for c in codis_set if c.lower() == token.lower()), None)
     if m:
         return m
-    # 3. Substitucions d'OCR
+    # 3. Sustituciones de OCR
     subs = {'O': 'Q', 'Q': 'O', 'l': '1', '0': 'O', '|': 'l'}
     if token[0] in subs:
         tc = subs[token[0]] + token[1:]
@@ -252,18 +291,18 @@ def _match_token(token, codis_set, cutoff=0.72):
 
 def detectar_codis_ocr(img_bytes, codis_renderer):
     """
-    Extreu els codis geològics de les etiquetes de text del mapa amb OCR multi-umbral.
+    Extrae los codis geológicos de las etiquetas de texto del mapa con OCR multi-umbral.
 
     Pipeline:
-    1. Aplicar Tesseract amb DOS umbrals de binarització:
-       - Umbral 140: captura text fosc sobre fons clar I text en unitats de color fosc
-                     (SDc marró, Caps verd, Sf blau, NMs groc)
-       - Umbral 170: captura text estàndard sobre fons pastel clar (Qbcn, Qpa, Qp)
-    2. Per cada token, aplicar _match_token (exacte → CI → subs OCR → fuzzy)
-    3. Validar: acceptar codi si apareix en 2+ umbrals O té confiança > 60
-       → elimina falsos positius que apareixen en un sol umbral amb baixa confiança
+    1. Aplicar Tesseract con DOS umbrales de binarización:
+       - Umbral 140: captura texto oscuro sobre fondo claro Y texto en unidades de color oscuro
+                     (SDc marrón, Caps verde, Sf azul, NMs amarillo)
+       - Umbral 170: captura texto estándar sobre fondo pastel claro (Qbcn, Qpa, Qp)
+    2. Por cada token, aplicar _match_token (exacto → CI → sust. OCR → fuzzy)
+    3. Validar: aceptar codi si aparece en 2+ umbrales O tiene confianza > 60
+       → elimina falsos positivos que aparecen en un solo umbral con baja confianza
 
-    Retorna: dict Codi → max_confiança
+    Retorna: dict Codi → max_confianza
     """
     if not TESSERACT_OK:
         return {}
@@ -313,13 +352,13 @@ def detectar_codis_ocr(img_bytes, codis_renderer):
 
 def detectar_codis_colors(img_bytes, renderer, min_fraccio=0.0003, cubs_px=6):
     """
-    Detecta codis a partir dels colors dominants de la imatge.
+    Detecta codis a partir de los colores dominantes de la imagen.
 
-    1. Quantitza els píxels no-blancs en cubs RGB de cubs_px
-    2. Selecciona clusters amb cobertura > min_fraccio
-    3. Assigna cada cluster al Codi del renderer amb distància euclidiana mínima
+    1. Cuantiza los píxeles no-blancos en cubos RGB de cubs_px
+    2. Selecciona clusters con cobertura > min_fraccio
+    3. Asigna cada cluster al Codi del renderer con distancia euclidiana mínima
 
-    S'usa com a complement de l'OCR per capturar unitats grans sense etiqueta visible.
+    Se usa como complemento del OCR para capturar unidades grandes sin etiqueta visible.
     """
     img = Image.open(BytesIO(img_bytes)).convert("RGB")
     pixels = np.array(img).reshape(-1, 3).astype(np.float32)
@@ -360,24 +399,24 @@ def detectar_codis_colors(img_bytes, renderer, min_fraccio=0.0003, cubs_px=6):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# FUSIÓ: OCR (principal) + COLORS (complement per a zones grans sense etiqueta)
+# FUSIÓN: OCR (principal) + COLORES (complemento para zonas grandes sin etiqueta)
 # ──────────────────────────────────────────────────────────────────────────────
 
 def fusionar_deteccions(ocr_codis, color_codis, total_px, min_pct_color=0.5):
     """
-    Combina els resultats d'OCR i colors seguint aquesta lògica:
-    - Tots els codis de l'OCR s'accepten (alta precisió).
-    - Els codis NOMÉS dels colors s'accepten si cobreixen > min_pct_color% de la imatge
-      (zona gran → segurament real, no soroll).
-    - Els codis NOMÉS dels colors amb cobertura petita es descarten (probable fals positiu).
+    Combina los resultados de OCR y colores siguiendo esta lógica:
+    - Todos los codis del OCR se aceptan (alta precisión).
+    - Los codis SOLO de colores se aceptan si cubren > min_pct_color% de la imagen
+      (zona grande → seguramente real, no ruido).
+    - Los codis SOLO de colores con cobertura pequeña se descartan (probable falso positivo).
 
-    Retorna: set de codis finals
+    Retorna: set de codis finales
     """
     finals = set(ocr_codis.keys())
 
     for codi, npx in color_codis.items():
         if codi in finals:
-            continue  # ja cobert per OCR
+            continue  # ya cubierto por OCR
         pct = npx / total_px * 100
         if pct >= min_pct_color:
             finals.add(codi)
@@ -527,8 +566,8 @@ with st.sidebar:
     y_centre = c2.number_input("Y (m)", value=4_582_200.0, format="%.1f")
     st.subheader("Dimensiones del rectángulo")
     d1, d2 = st.columns(2)
-    ample = d1.number_input("Ample (m)", value=5_000.0, min_value=100.0)
-    alt   = d2.number_input("Alt (m)",   value=4_000.0, min_value=100.0)
+    ample = d1.number_input("Ancho (m)", value=5_000.0, min_value=100.0)
+    alt   = d2.number_input("Alto (m)",   value=4_000.0, min_value=100.0)
     st.subheader("Visualización")
     fons_key = st.selectbox(
         "Capa de fondo",
@@ -568,7 +607,7 @@ if executar:
                         st.warning(f"⚠️ No se ha podido descargar la capa de fondo '{fons_key}'. "
                                    "Se mostrará solo la geología.")
 
-                # Composar geologia + fons si tenim els dos
+                # Componer geología + fondo si tenemos los dos
                 if fons_bytes is not None:
                     with st.spinner("Componiendo geología + fondo…"):
                         img_comp = compondre_imatges(fons_bytes, img_bytes, opacitat/100)
@@ -584,24 +623,41 @@ if executar:
 
                 codis_renderer = set(renderer.keys())
 
-                # 3a. OCR — mètode principal ───────────────────────────────────
-                ocr_codis = {}
-                if TESSERACT_OK:
-                    with st.spinner("Aplicando OCR sobre las etiquetas del mapa…"):
-                        ocr_codis = detectar_codis_ocr(img_bytes, codis_renderer)
+                # 3. Identificación de unidades — método prioritario: API directa ──
+                unitats_api  = None
+                ocr_codis    = {}
+                color_codis  = {}
+                metode_used  = ""
 
-                # 3b. Colors — mètode complement ──────────────────────────────
-                with st.spinner("Analizando colores dominantes de la imagen…"):
-                    color_codis = detectar_codis_colors(img_bytes, renderer)
+                with st.spinner("Consultando unidades geológicas del área (API)…"):
+                    unitats_api = obtenir_unitats_bbox(minx, miny, maxx, maxy)
 
-                # 3c. Fusió ───────────────────────────────────────────────────
-                codis_finals = fusionar_deteccions(ocr_codis, color_codis, total_px)
+                if unitats_api is not None:
+                    # ── MÉTODO PRINCIPAL: API directa ─────────────────────────
+                    # Resultado exacto al 100%: el servidor devuelve exactamente
+                    # los codis que intersectan con el BBOX, sin OCR ni colores.
+                    metode_used  = "API directa (ArcGIS REST)"
+                    codis_finals = {u["Codi"] for u in unitats_api if u.get("Codi")}
+                    descripcions = {
+                        u["Codi"]: u for u in unitats_api if u.get("Codi")
+                    }
+                else:
+                    # ── FALLBACK: OCR + colores ───────────────────────────────
+                    # Solo si el servicio ArcGIS REST no responde
+                    st.warning("⚠️ API directa no disponible. Usando OCR + análisis de colores.")
+                    metode_used = "OCR + colores dominantes (fallback)"
 
-                # 4. Descripcions per als codis detectats ─────────────────────
-                descripcions = {}
-                if codis_finals:
-                    with st.spinner(f"Obteniendo descripciones de {len(codis_finals)} unidades…"):
-                        descripcions = obtenir_descripcions(list(codis_finals))
+                    if TESSERACT_OK:
+                        with st.spinner("Aplicando OCR sobre las etiquetas del mapa…"):
+                            ocr_codis = detectar_codis_ocr(img_bytes, codis_renderer)
+                    with st.spinner("Analizando colores dominantes de la imagen…"):
+                        color_codis = detectar_codis_colors(img_bytes, renderer)
+                    codis_finals = fusionar_deteccions(ocr_codis, color_codis, total_px)
+                    if codis_finals:
+                        with st.spinner(f"Obteniendo descripciones de {len(codis_finals)} unidades…"):
+                            descripcions = obtenir_descripcions(list(codis_finals))
+                    else:
+                        descripcions = {}
 
                 # 5. Llegenda ─────────────────────────────────────────────────
                 llegenda_path = os.path.join(tmpdir, "icgc_llegenda.png")
@@ -610,16 +666,15 @@ if executar:
                     r = construir_llegenda(codis_finals, renderer, descripcions, llegenda_path)
                     te_llegenda = (r is not None)
 
-                # 6. Missatge d'èxit ───────────────────────────────────────────
+                # 6. Mensaje de éxito ───────────────────────────────────────────
                 if codis_finals:
-                    ocr_n   = len(ocr_codis)
-                    color_n = len([c for c in codis_finals if c not in ocr_codis])
                     st.success(
-                        f"✅ **{len(codis_finals)} unidades identificadas** — "
-                        f"{ocr_n} via OCR · {color_n} via colores dominantes"
+                        f"✅ **{len(codis_finals)} unidades geológicas identificadas** — "
+                        f"Método: *{metode_used}*"
                     )
                 else:
-                    st.warning("⚠️ No se han identificado unidades. Comprueba la conexión con el servicio ICGC.")
+                    st.warning("⚠️ No se han identificado unidades. "
+                               "Comprueba la conexión con el servicio ICGC.")
 
                 # 7. Previsualització ──────────────────────────────────────────
                 st.subheader("Previsualización")
