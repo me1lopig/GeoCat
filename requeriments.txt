@@ -1,0 +1,29 @@
+
+# ──────────────────────────────────────────────────────────────────
+# requirements.txt — Generador de Cartografía Geológica (ICGC)
+# ──────────────────────────────────────────────────────────────────
+ 
+# Interfaz web
+streamlit>=1.35.0
+ 
+# Peticiones HTTP (servicios WMS y ArcGIS REST del ICGC)
+requests>=2.31.0
+ 
+# Procesamiento numérico y análisis de colores
+numpy>=1.26.0
+ 
+# Imágenes (composición geología + fondo, leyenda PIL)
+Pillow>=10.3.0
+ 
+# Datos geoespaciales vectoriales (GeoDataFrame, GeoJSON)
+geopandas>=1.0.0
+ 
+# Geometría espacial (requerida por geopandas)
+shapely>=2.0.0
+ 
+# Tablas de datos (DataFrame para la tabla de materiales)
+pandas>=2.1.0
+ 
+# OCR sobre etiquetas del mapa (método fallback)
+# Requiere también: apt install tesseract-ocr (sistema operativo)
+pytesseract>=0.3.10

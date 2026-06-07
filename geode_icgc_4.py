@@ -546,7 +546,7 @@ Consulta el **WMS Geología Territorial 1:50.000 del ICGC** y genera:
    - **Método principal**: consulta directa API ArcGIS REST *(precisión 100%)*.
    - **Fallback**: OCR + análisis de colores dominantes si la API no responde.
    - Método activo: `{metode_info}`
-3. Archivos **CSV** y **GeoJSON** si el servicio vectorial es accesible.
+3. Diseñado según directriz ITQ404.
 
 > Coordenadas **ETRS89 UTM zona 31N (EPSG:25831)**
 """)
